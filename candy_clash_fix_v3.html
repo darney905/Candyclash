@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Candy Clash — Fix v3</title>
+<style>
+  :root{--bg1:#ff9a9e;--bg2:#fbc2eb}
+  html,body{height:100%;margin:0;font-family:Inter,system-ui,Segoe UI,Roboto,Arial;background:linear-gradient(180deg,var(--bg1),var(--bg2));}
+  .center{position:fixed;inset:0;display:flex;align-items:center;justify-content:center}
+  .intro{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:12px}
+  .playBtn{padding:12px 28px;border-radius:28px;border:0;background:#ff7eb3;color:white;font-weight:700;cursor:pointer}
+  canvas{background:linear-gradient(180deg,#fff,#f3fbff);border-radius:12px;box-shadow:0 12px 30px rgba(2,6,23,0.12)}
+  .hud{position:fixed;left:16px;top:16px;color:#072036}
+  .hud .stat{background:white;padding:8px;border-radius:8px;margin-bottom:8px;font-weight:700}
+  .modal{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;visibility:hidden;opacity:0;background:rgba(0,0,0,0.45);transition:all .2s}
+  .modal.show{visibility:visible;opacity:1}
+  .card{background:white;padding:18px;border-radius:12px;color:#072036;min-width:280px;text-align:center}
+  .charSVG{width:120px;height:120px}
+</style>
+</head>
+<body>
+  <div class="center">
+    <div id="gameArea" style="display:flex;gap:18px;align-items:center">
+      <div class="hud">
+        <div class="stat">Score: <span id="score">0</span></div>
+        <div class="stat">Moves: <span id="moves">100</span></div>
+      </div>
+      <canvas id="board" width="640" height="640" aria-label="Plateau de jeu"></canvas>
+    </div>
+
+    <div id="intro" class="intro">
+      <svg class="charSVG" viewBox="0 0 120 120" xmlns="http://www.w3.org/2000/svg">
+        <circle cx="60" cy="60" r="50" fill="#ffd9b6" stroke="#ffb38f" stroke-width="2"/>
+        <circle cx="44" cy="50" r="8" fill="#3a1f09" />
+        <circle cx="76" cy="50" r="8" fill="#3a1f09" />
+        <path d="M40 76 Q60 92 80 76" stroke="#3a1f09" stroke-width="4" fill="none" stroke-linecap="round"/>
+      </svg>
+      <div style="background:rgba(255,255,255,0.95);padding:12px;border-radius:12px;color:#072036;max-width:520px">
+        <h2 style="margin:0 0 8px 0">CandyBuddy</h2>
+        <div id="introText">Salut ! Je suis CandyBuddy 😄 — appuie sur Play pour lancer le tutoriel.</div>
+      </div>
+      <button id="playBtn" class="playBtn">▶ Play</button>
+    </div>
+
+  </div>
+
+  <div id="tutorialModal" class="modal"><div class="card"><div id="tutoContent"></div><div style="margin-top:12px"><button id="tutoNext" class="playBtn">Suivant</button></div></div></div>
+
+<script>
+// --- Robust Match-3 + Intro/Tutorial ---
+const canvas = document.getElementById('board');
+const ctx = canvas.getContext('2d');
+const GRID = 8; let TILE = Math.floor(canvas.width / GRID);
+const TYPES = 6; const COLORS = ['#FF3B3B','#FFB13B','#FFD93D','#4CE176','#4DB6FF','#B86CFF'];
+let board = null; let allowInput = false; let score = 0; let movesLeft = 100;
+let selected = null;
+
+// Audio (starts on user gesture)
+let audioCtx = null; function ensureAudio(){ if(audioCtx) return; try{ const A = window.AudioContext||window.webkitAudioContext; audioCtx = new A(); }catch(e){ audioCtx = null; }}
+function startMusic(){ if(!audioCtx) return; if(window._music) return; const o = audioCtx.createOscillator(), g = audioCtx.createGain(); o.type='sine'; o.frequency.value=220; g.gain.value=0.02; o.connect(g); g.connect(audioCtx.destination); o.start(); window._music={o,g}; }
+
+// UTIL
+function randType(){ return Math.floor(Math.random()*TYPES); }
+function inBounds(x,y){ return x>=0 && y>=0 && x<GRID && y<GRID; }
+
+// Create + fill board (defensive)
+function createBoard(){ board = []; for(let y=0;y<GRID;y++){ board[y]=[]; for(let x=0;x<GRID;x++){ board[y][x] = { type: randType(), anim: null }; } } }
+function removeInitialMatches(){ let safety=0; while(true && safety<200){ const m = findMatches(); if(m.length===0) break; for(const c of m){ if(board[c.y] && board[c.y][c.x]) board[c.y][c.x].type = randType(); } safety++; } }
+
+// Match detection (returns unique cells)
+function findMatches(){ const marks = Array.from({length:GRID}, ()=>Array(GRID).fill(false));
+  // horiz
+  for(let y=0;y<GRID;y++){ const row = board[y]; if(!row) continue; let runType = (row[0] && typeof row[0].type!=='undefined')?row[0].type:null; let start=0; for(let x=1;x<=GRID;x++){ const cur = (x<GRID && row[x] && typeof row[x].type!=='undefined')?row[x].type:null; if(cur===runType) continue; const len = x-start; if(runType!==null && len>=3){ for(let k=start;k<x;k++) marks[y][k]=true; } start=x; runType=cur; } }
+  // vert
+  for(let x=0;x<GRID;x++){ let runType = (board[0] && board[0][x] && typeof board[0][x].type!=='undefined')?board[0][x].type:null; let start=0; for(let y=1;y<=GRID;y++){ const cur = (y<GRID && board[y] && board[y][x] && typeof board[y][x].type!=='undefined')?board[y][x].type:null; if(cur===runType) continue; const len = y-start; if(runType!==null && len>=3){ for(let k=start;k<y;k++) marks[k][x]=true; } start=y; runType=cur; } }
+  const out=[]; for(let y=0;y<GRID;y++) for(let x=0;x<GRID;x++) if(marks[y][x]) out.push({x,y}); return out; }
+
+// Rendering
+function drawCandy(x,y,t,offsetX=0,offsetY=0,scale=1,alpha=1){ const cx = x*TILE + TILE/2 + offsetX; const cy = y*TILE + TILE/2 + offsetY; const r = (TILE*0.36)*scale; ctx.save(); ctx.globalAlpha = alpha; ctx.beginPath(); ctx.fillStyle='rgba(0,0,0,0.12)'; ctx.ellipse(cx+4,cy+6,r*0.95,r*0.6,0,0,Math.PI*2); ctx.fill(); const color = COLORS[(t.type||0)%COLORS.length]; const g = ctx.createLinearGradient(cx-r,cy-r,cx+r,cy+r); g.addColorStop(0,lighten(color,0.12)); g.addColorStop(0.75,color); ctx.beginPath(); ctx.ellipse(cx,cy,r,r*0.9,0,0,Math.PI*2); ctx.fillStyle = g; ctx.fill(); ctx.beginPath(); ctx.ellipse(cx-r*0.32,cy-r*0.45,r*0.45,r*0.25,0,0,Math.PI*2); ctx.fillStyle='rgba(255,255,255,0.6)'; ctx.fill(); ctx.restore(); }
+function render(){ ctx.clearRect(0,0,canvas.width,canvas.height); ctx.fillStyle='rgba(0,0,0,0.04)'; ctx.fillRect(8,8,canvas.width-16,canvas.height-16);
+  for(let y=0;y<GRID;y++){ for(let x=0;x<GRID;x++){ const tile = (board[y] && board[y][x])?board[y][x]:null; if(!tile) continue; const a = tile.anim||{}; drawCandy(x,y,tile,a.offX||0,a.offY||0,a.scale||1,(typeof a.alpha!=='undefined')?a.alpha:1); } }
+  if(selected){ ctx.save(); ctx.strokeStyle='rgba(255,255,255,0.9)'; ctx.lineWidth=4; ctx.strokeRect(selected.c*TILE+6, selected.r*TILE+6, TILE-12, TILE-12); ctx.restore(); } }
+function lighten(hex,amt){ const c=hexToRgb(hex); return `rgb(${Math.min(255,c.r+Math.round(255*amt))},${Math.min(255,c.g+Math.round(255*amt))},${Math.min(255,c.b+Math.round(255*amt))})`; }
+function hexToRgb(hex){ const m=hex.replace('#',''); return {r:parseInt(m.substring(0,2),16),g:parseInt(m.substring(2,4),16),b:parseInt(m.substring(4,6),16)} }
+
+// Swap animation then resolve
+function animateSwap(p1,p2,onComplete){ const A = board[p1.r][p1.c], B = board[p2.r][p2.c]; if(!A||!B){ onComplete && onComplete(false); return; } const dx = (p2.c - p1.c)*TILE, dy = (p2.r - p1.r)*TILE; const dur = 180; const start = performance.now(); function step(){ const t = Math.min(1,(performance.now()-start)/dur); const e = 1 - Math.pow(1-t,3); A.anim = {offX:dx*e, offY:dy*e}; B.anim = {offX:-dx*e, offY:-dy*e}; render(); if(t<1) requestAnimationFrame(step); else { A.anim = B.anim = null; const tmp = board[p1.r][p1.c]; board[p1.r][p1.c] = board[p2.r][p2.c]; board[p2.r][p2.c] = tmp; onComplete && onComplete(true); } } requestAnimationFrame(step); }
+
+// Core: attempt swap, if no match revert
+function attemptSwap(p1,p2){ allowInput=false; animateSwap(p1,p2,(ok)=>{ if(!ok){ allowInput=true; return; } const matches = findMatches(); if(matches.length>0){ handleMatches(matches); } else { setTimeout(()=>{ animateSwap(p1,p2,()=>{ allowInput=true; }); }, 80); } }); }
+
+// Handle matches -> clear -> collapse -> refill -> chain
+function handleMatches(cells){ if(!cells||cells.length===0){ allowInput=true; return; } const uniq = {}; cells.forEach(c=>uniq[`${c.x},${c.y}`]=true); const list = Object.keys(uniq).map(k=>{ const [x,y] = k.split(',').map(Number); return {x,y}; }); score += list.length*10; document.getElementById('score').innerText = score; let finished = 0; list.forEach(c=>{ const t = board[c.y] && board[c.y][c.x] ? board[c.y][c.x] : null; if(!t){ finished++; if(finished===list.length) afterClear(); return; } const dur=200; const s=performance.now(); t.anim={alpha:1,scale:1}; (function loop(){ const p = Math.min(1,(performance.now()-s)/dur); t.anim.alpha = 1-p; t.anim.scale = 1-p*0.6; render(); if(p<1) requestAnimationFrame(loop); else { if(board[c.y]) board[c.y][c.x] = null; finished++; if(finished===list.length) afterClear(); } })(); }); function afterClear(){ collapseAndRefill(()=>{ const next = findMatches(); if(next.length>0) handleMatches(next); else { allowInput=true; } }); } }
+
+function collapseAndRefill(cb){ for(let x=0;x<GRID;x++){ let write = GRID-1; for(let y=GRID-1;y>=0;y--){ if(board[y] && board[y][x]){ if(write!==y){ board[write][x] = board[y][x]; board[y][x] = null; } write--; } } for(let y=write;y>=0;y--){ board[y][x] = { type: randType(), anim: { offY: -TILE*(0.6 + Math.random()*0.6), alpha: 0 } }; } } const dur=260; const start=performance.now(); (function tick(){ const p = Math.min(1,(performance.now()-start)/dur); const e = 1-Math.pow(1-p,3); for(let y=0;y<GRID;y++) for(let x=0;x<GRID;x++){ const t = (board[y] && board[y][x])?board[y][x]:null; if(t && t.anim){ t.anim.offY = (1-e)*(-TILE*0.6); t.anim.alpha = Math.min(1,(t.anim.alpha||0)+0.06); } } render(); if(p<1) requestAnimationFrame(tick); else { for(let y=0;y<GRID;y++) for(let x=0;x<GRID;x++) if(board[y] && board[y][x]) board[y][x].anim = null; cb && cb(); } })(); }
+
+// Input handling
+canvas.addEventListener('pointerdown', (ev)=>{ if(!allowInput) return; const rect = canvas.getBoundingClientRect(); const c = Math.floor((ev.clientX-rect.left)/TILE); const r = Math.floor((ev.clientY-rect.top)/TILE); if(!inBounds(c,r)) return; if(!selected){ selected = {r,c}; render(); } else { const d = Math.abs(selected.r - r) + Math.abs(selected.c - c); if(d===1){ attemptSwap(selected, {r,c}); selected=null; } else { selected = {r,c}; render(); } } });
+
+// Tutorial & start flow
+const playBtn = document.getElementById('playBtn'); const tutorialModal = document.getElementById('tutorialModal'); const tutoContent = document.getElementById('tutoContent'); const tutoNext = document.getElementById('tutoNext');
+const introElem = document.getElementById('intro');
+playBtn.addEventListener('click', ()=>{ ensureAudio(); if(audioCtx) startMusic(); introElem.style.display='none'; openTutorial(startGame); });
+
+function openTutorial(onDone){ const steps = ['Bienvenue ! Clique deux bonbons adjacents pour les échanger.','Aligne 3+ pour supprimer.','Bonne chance !']; let i=0; tutoContent.innerText = steps[0]; tutorialModal.classList.add('show'); tutoNext.onclick = ()=>{ i++; if(i<steps.length){ tutoContent.innerText = steps[i]; } else { tutorialModal.classList.remove('show'); onDone && onDone(); } }; }
+
+function startGame(){ createBoard(); removeInitialMatches(); score=0; movesLeft=100; document.getElementById('score').innerText=score; document.getElementById('moves').innerText=movesLeft; allowInput=true; selected=null; render(); }
+
+// small game loop for animations
+(function loop(){ render(); requestAnimationFrame(loop); })();
+
+// Expose save/load and debug helpers on window for convenience
+window._cc = { createBoard, removeInitialMatches, findMatches, startGame };
+</script>
+</body>
+</html>
